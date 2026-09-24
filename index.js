@@ -1,7 +1,7 @@
-require('dotenv').config();
+require("dotenv").config();
 
-const express = require('express');
-const multer = require('multer');
+const express = require("express");
+const multer = require("multer");
 
 const {
   S3Client,
@@ -9,26 +9,23 @@ const {
   ListObjectsV2Command,
   GetObjectCommand,
   DeleteObjectCommand,
-} = require('@aws-sdk/client-s3');
-
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+} = require("@aws-sdk/client-s3");
 
 const app = express();
 
-const port = process.env.PORT || 3000;
-
+const PORT = process.env.PORT || 3000;
 
 // ============================================================
 // S3 CONFIGURATION
 // ============================================================
 
 const s3 = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
+  region: "us-east-1",
 
-  // NIC / S3-compatible endpoint
+  // On-prem S3 endpoint
   endpoint: process.env.S3_ENDPOINT,
 
-  // Required for many S3-compatible storage systems
+  // Required for S3-compatible storage
   forcePathStyle: true,
 
   credentials: {
@@ -38,85 +35,90 @@ const s3 = new S3Client({
 });
 
 const BUCKET = process.env.AWS_BUCKET;
-const FOLDER = process.env.AWS_FOLDER || 'testing';
-
+const FOLDER = process.env.AWS_FOLDER || "testing";
 
 // ============================================================
-// MULTER CONFIGURATION
+// MULTER
 // ============================================================
 
 const upload = multer({
   storage: multer.memoryStorage(),
 
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10 MB
+    fileSize: 10 * 1024 * 1024,
   },
 });
 
+app.use(express.urlencoded({ extended: true }));
 
 // ============================================================
-// HOME PAGE
+// HOME
 // ============================================================
 
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.send(`
+    <!DOCTYPE html>
+
     <html>
-      <head>
-        <title>S3 Upload Test</title>
-      </head>
 
-      <body>
-        <h1>S3 Upload Test</h1>
+    <head>
+      <title>On-Prem S3 Upload</title>
+    </head>
 
-        <form
-          action="/upload"
-          method="POST"
-          enctype="multipart/form-data"
+    <body>
+
+      <h1>On-Prem S3 Image Upload</h1>
+
+      <form
+        action="upload"
+        method="POST"
+        enctype="multipart/form-data"
+      >
+
+        <input
+          type="file"
+          name="file"
+          accept="image/*"
+          required
         >
-          <input
-            type="file"
-            name="file"
-            accept="image/*"
-            required
-          />
 
-          <button type="submit">
-            Upload
-          </button>
-        </form>
+        <br><br>
 
-        <br>
+        <button type="submit">
+          Upload Image
+        </button>
 
-        <p>
-          <a href="/images">
-            View uploaded images
-          </a>
-        </p>
-      </body>
+      </form>
+
+      <br>
+
+      <a href="images">
+        View Uploaded Images
+      </a>
+
+    </body>
+
     </html>
   `);
 });
 
-
 // ============================================================
-// UPLOAD IMAGE
+// UPLOAD
 // ============================================================
 
-app.post('/upload', upload.single('file'), async (req, res) => {
+app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-
     if (!req.file) {
-      return res.status(400).send('No file uploaded');
+      return res.status(400).send("No file selected");
     }
 
-    // Remove spaces from filename
-    const fileName = req.file.originalname.replace(/\s+/g, '-');
+    const fileName = req.file.originalname.replace(/\s+/g, "-");
 
-    // Example:
-    // testing/1727182312345-photo.jpg
     const key = `${FOLDER}/${Date.now()}-${fileName}`;
 
-    console.log('Uploading:', key);
+    console.log("Uploading file:");
+    console.log("Bucket:", BUCKET);
+    console.log("Key:", key);
 
     await s3.send(
       new PutObjectCommand({
@@ -127,251 +129,333 @@ app.post('/upload', upload.single('file'), async (req, res) => {
       })
     );
 
-    console.log('Upload successful:', key);
+    console.log("Upload successful:", key);
 
     res.send(`
-      <html>
-        <body>
-          <h2>Uploaded successfully!</h2>
+      <h2>Upload Successful</h2>
 
-          <p>
-            <strong>File:</strong> ${key}
-          </p>
+      <p>
+        ${key}
+      </p>
 
-          <p>
-            <a href="/images">
-              View uploaded images
-            </a>
-          </p>
+      <a href="images">
+        View Images
+      </a>
 
-          <p>
-            <a href="/">
-              Upload another image
-            </a>
-          </p>
-        </body>
-      </html>
+      <br><br>
+
+      <a href="./">
+        Upload Another Image
+      </a>
     `);
 
   } catch (err) {
-
-    console.error('Upload error:', err);
+    console.error("Upload error:", err);
 
     res.status(500).send(
-      'Upload failed: ' + err.message
+      "Upload failed: " + err.message
     );
   }
 });
 
-
 // ============================================================
-// LIST & DISPLAY IMAGES
+// LIST IMAGES
 // ============================================================
 
-app.get('/images', async (req, res) => {
-
+app.get("/images", async (req, res) => {
   try {
 
-    const { Contents = [] } = await s3.send(
+    const data = await s3.send(
       new ListObjectsV2Command({
         Bucket: BUCKET,
         Prefix: `${FOLDER}/`,
       })
     );
 
-    // Only display image files
-    const imageContents = Contents.filter(item =>
-      /\.(jpg|jpeg|png|gif|webp)$/i.test(item.Key)
+    const files = (data.Contents || []).filter((file) =>
+      /\.(jpg|jpeg|png|gif|webp)$/i.test(file.Key)
     );
 
-    if (!imageContents.length) {
-
+    if (files.length === 0) {
       return res.send(`
-        <html>
-          <body>
+        <h2>No Images Found</h2>
 
-            <h1>No images found</h1>
-
-            <p>
-              <a href="/">
-                Back to upload
-              </a>
-            </p>
-
-          </body>
-        </html>
+        <a href="./">
+          Back to Upload
+        </a>
       `);
     }
 
+    const images = files.map((file) => {
 
-    // Generate signed URLs
-    const images = await Promise.all(
+      // Put the S3 key into query parameter
+      const imageUrl =
+        `image?key=${encodeURIComponent(file.Key)}`;
 
-      imageContents.map(async (item) => {
+      return `
+        <div class="image-card">
 
-        const url = await getSignedUrl(
+          <h4>
+            ${file.Key}
+          </h4>
 
-          s3,
-
-          new GetObjectCommand({
-            Bucket: BUCKET,
-            Key: item.Key,
-          }),
-
-          {
-            expiresIn: 3600, // 1 hour
-          }
-        );
-
-
-        return `
-          <div
-            style="
-              margin: 20px;
-              padding: 20px;
-              border: 1px solid #ccc;
-              display: inline-block;
-            "
+          <img
+            src="${imageUrl}"
+            alt="${file.Key}"
           >
 
-            <p>
-              <strong>${item.Key}</strong>
-            </p>
+          <br><br>
 
-            <img
-              src="${url}"
-              alt="${item.Key}"
-              style="
-                max-width: 400px;
-                max-height: 400px;
-              "
+          <a
+            href="${imageUrl}"
+            target="_blank"
+          >
+            Open Full Image
+          </a>
+
+          <br><br>
+
+          <form
+            action="delete"
+            method="POST"
+          >
+
+            <input
+              type="hidden"
+              name="key"
+              value="${file.Key}"
             >
 
-            <br><br>
+            <button type="submit">
+              Delete
+            </button>
 
-            <form
-              action="/delete"
-              method="POST"
-            >
+          </form>
 
-              <input
-                type="hidden"
-                name="key"
-                value="${item.Key}"
-              >
-
-              <button type="submit">
-                Delete
-              </button>
-
-            </form>
-
-          </div>
-        `;
-      })
-    );
-
+        </div>
+      `;
+    });
 
     res.send(`
+      <!DOCTYPE html>
+
       <html>
 
-        <head>
-          <title>Uploaded Images</title>
-        </head>
+      <head>
 
-        <body>
+        <title>Uploaded Images</title>
 
-          <h1>Uploaded Images</h1>
+        <style>
 
-          <p>
-            <a href="/">
-              Back to upload
-            </a>
-          </p>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background: #f5f5f5;
+          }
 
-          <hr>
+          .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+          }
 
-          ${images.join('')}
+          .image-card {
+            width: 350px;
+            background: white;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+          }
 
-        </body>
+          .image-card img {
+            width: 100%;
+            height: 300px;
+            object-fit: contain;
+            background: #eee;
+            border: 1px solid #ddd;
+          }
+
+          .image-card h4 {
+            word-break: break-all;
+          }
+
+          button {
+            padding: 7px 15px;
+            cursor: pointer;
+          }
+
+        </style>
+
+      </head>
+
+      <body>
+
+        <h1>Uploaded Images</h1>
+
+        <p>
+          <a href="./">
+            Upload More Images
+          </a>
+        </p>
+
+        <hr>
+
+        <div class="container">
+
+          ${images.join("")}
+
+        </div>
+
+      </body>
 
       </html>
     `);
 
   } catch (err) {
 
-    console.error('List images error:', err);
+    console.error("List images error:", err);
 
     res.status(500).send(
-      'Failed to list images: ' + err.message
+      "Failed to list images: " + err.message
     );
   }
 });
 
-
 // ============================================================
-// DELETE IMAGE
+// SERVE IMAGE FROM ON-PREM S3
+// ============================================================
+//
+// Browser:
+//
+// /image?key=testing%2Fphoto.jpg
+//
+// Node.js:
+//
+// GetObjectCommand -> S3
+//
+// S3:
+//
+// Returns image bytes
+//
+// Node.js:
+//
+// Sends image bytes -> Browser
+//
 // ============================================================
 
-app.post(
-  '/delete',
-  express.urlencoded({ extended: true }),
-  async (req, res) => {
+app.get("/image", async (req, res) => {
 
-    try {
+  try {
 
-      const key = req.body.key;
+    const key = req.query.key;
 
-      if (!key) {
-        return res.status(400).send(
-          'Missing object key'
-        );
-      }
-
-      console.log('Deleting:', key);
-
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-        })
-      );
-
-      console.log('Delete successful:', key);
-
-      res.redirect('/images');
-
-    } catch (err) {
-
-      console.error('Delete error:', err);
-
-      res.status(500).send(
-        'Delete failed: ' + err.message
+    if (!key) {
+      return res.status(400).send(
+        "Missing image key"
       );
     }
-  }
-);
 
+    console.log("Fetching image from S3:");
+    console.log("Bucket:", BUCKET);
+    console.log("Key:", key);
+
+    const data = await s3.send(
+      new GetObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+      })
+    );
+
+    // Set correct content type
+    if (data.ContentType) {
+      res.setHeader(
+        "Content-Type",
+        data.ContentType
+      );
+    }
+
+    // Tell browser to display the image
+    res.setHeader(
+      "Content-Disposition",
+      "inline"
+    );
+
+    // Send S3 stream directly to browser
+    data.Body.pipe(res);
+
+  } catch (err) {
+
+    console.error("Get image error:", err);
+
+    res.status(500).send(
+      "Failed to load image: " + err.message
+    );
+  }
+});
+
+// ============================================================
+// DELETE
+// ============================================================
+
+app.post("/delete", async (req, res) => {
+
+  try {
+
+    const key = req.body.key;
+
+    if (!key) {
+      return res.status(400).send(
+        "Missing object key"
+      );
+    }
+
+    console.log("Deleting:");
+    console.log("Bucket:", BUCKET);
+    console.log("Key:", key);
+
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+      })
+    );
+
+    console.log("Delete successful:", key);
+
+    res.redirect("images");
+
+  } catch (err) {
+
+    console.error("Delete error:", err);
+
+    res.status(500).send(
+      "Delete failed: " + err.message
+    );
+  }
+});
+
+// ============================================================
+// FAVICON
+// ============================================================
+
+app.get("/favicon.ico", (req, res) => {
+  res.status(204).end();
+});
 
 // ============================================================
 // START SERVER
 // ============================================================
 
-app.listen(port, () => {
+app.listen(PORT, () => {
 
-  console.log(
-    `Server running at http://localhost:${port}`
-  );
+  console.log("----------------------------------------");
+  console.log("S3 Integration Server Started");
+  console.log("----------------------------------------");
 
-  console.log(
-    `S3 endpoint: ${process.env.S3_ENDPOINT}`
-  );
+  console.log(`Port: ${PORT}`);
+  console.log(`S3 Endpoint: ${process.env.S3_ENDPOINT}`);
+  console.log(`Bucket: ${BUCKET}`);
+  console.log(`Folder: ${FOLDER}`);
 
-  console.log(
-    `Bucket: ${BUCKET}`
-  );
-
-  console.log(
-    `Folder: ${FOLDER}`
-  );
+  console.log("----------------------------------------");
 });
